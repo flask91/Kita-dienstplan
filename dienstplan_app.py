@@ -50,16 +50,19 @@ if parents_input:
             st.markdown(f"### 🧑‍🍼 {parent}")
             n_days = days_per_parent + (1 if idx < rest_days else 0)
             preselected = selections.get(parent, [])
-            options = sorted(remaining_days.union(preselected))
-            selected = st.multiselect(f"Wähle {n_days} Tage für {parent}",
-                                      options,
-                                      default=preselected,
-                                      key=f"sel_{parent}")
-            if len(selected) > n_days:
+            calendar_df = pd.DataFrame({"Datum": workdays})
+            calendar_df["Wochentag"] = calendar_df["Datum"].dt.strftime("%A")
+            calendar_df["Auswählen"] = calendar_df["Datum"].isin(preselected)
+
+            edited = st.data_editor(calendar_df, key=f"calendar_{parent}", use_container_width=True, disabled=["Datum", "Wochentag"])
+
+            selected_dates = edited[edited["Auswählen"] == True]["Datum"].tolist()
+
+            if len(selected_dates) > n_days:
                 st.error(f"❌ Du hast zu viele Tage ausgewählt! Max: {n_days}")
             else:
-                selections[parent] = selected
-                remaining_days -= set(selected)
+                selections[parent] = selected_dates
+                remaining_days -= set(selected_dates)
 
         st.subheader("📊 Übersicht")
         table = []
