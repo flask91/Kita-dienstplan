@@ -26,15 +26,14 @@ if parents_input:
             random.shuffle(parents)
 
         st.subheader("👪 Eltern in Reihenfolge")
-st.write(\"Falls nötig, kannst du die Reihenfolge der Eltern hier manuell anpassen:\")
-new_order_input = st.text_area(\"Reihenfolge manuell ändern (ein Name pro Zeile):\", \"\\n\".join(parents))
+        st.write("Falls nötig, kannst du die Reihenfolge der Eltern hier manuell anpassen:")
+        new_order_input = st.text_area("Reihenfolge manuell ändern (ein Name pro Zeile):", "\n".join(parents))
 
-new_order = [name.strip() for name in new_order_input.strip().split(\"\\n\") if name.strip()]
-if set(new_order) == set(parents) and len(new_order) == len(parents):
-    parents = new_order
-else:
-    st.warning(\"Die manuelle Reihenfolge ist ungültig oder unvollständig. Ursprüngliche Reihenfolge wird beibehalten.\")
-
+        new_order = [name.strip() for name in new_order_input.strip().split("\n") if name.strip()]
+        if set(new_order) == set(parents) and len(new_order) == len(parents):
+            parents = new_order
+        else:
+            st.warning("Die manuelle Reihenfolge ist ungültig oder unvollständig. Ursprüngliche Reihenfolge wird beibehalten.")
 
         workdays = generate_workdays(start_date, weeks)
         total_days = len(workdays)
