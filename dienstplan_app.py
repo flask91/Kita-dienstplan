@@ -3,8 +3,9 @@ import pandas as pd
 import datetime
 import sqlite3
 from streamlit_calendar import calendar
+import time
 
-st.set_page_config(page_title="KITA Dienstplan Tool")
+st.set_page_config(page_title="KITA Dienstplan Tool", layout="wide")
 st.title("\U0001F4C5 KITA Dienstplan Generator")
 
 # --- Datenbank Setup ---
@@ -137,22 +138,22 @@ def get_calendar_view(start_date, weeks):
     month_diff = (end_date.year - start_date.year) * 12 + (end_date.month - start_date.month) + 1
     return {
         "initialView": "dayGridMonth",
-        "selectable": "multi",  # Korrektur: Mehrfachauswahl aktivieren
+        "selectable": True,
+        "selectMirror": True,
         "editable": True,
-        "selectMirror": True,   # Visuelles Feedback bei Auswahl
+        "dayMaxEvents": True,
         "locale": "de",
-        "height": 500 + month_diff * 100,
+        "height": 600,
+        "headerToolbar": {
+            "left": "prev,next today",
+            "center": "title",
+            "right": "dayGridMonth,timeGridWeek,timeGridDay"
+        },
         "visibleRange": {
             "start": start_date.strftime("%Y-%m-%d"),
             "end": end_date.strftime("%Y-%m-%d")
         }
     }
-
-# Session State für Auswahl initialisieren
-if f'selected_{username}' not in st.session_state:
-    # Bereits getätigte Auswahl laden
-    existing_selections = c.execute("SELECT date FROM selections WHERE username = ?", (username,)).fetchall()
-    st.session_state[f'selected_{username}'] = [datetime.datetime.strptime(d[0], "%Y-%m-%d").date() for d in existing_selections]
 
 # Arbeitstage generieren
 workdays = generate_workdays(start_date, weeks)
@@ -161,64 +162,90 @@ days_per_parent = total_days // len(parents)
 rest_days = total_days % len(parents)
 n_days = days_per_parent + (1 if current_index < rest_days else 0)
 
-# Kalender-Events aus Session State erstellen
+# Session State für Auswahl initialisieren
+if 'selected_dates' not in st.session_state:
+    st.session_state.selected_dates = []
+
+# Bereits getätigte Auswahl laden
+existing_selections = c.execute("SELECT date FROM selections WHERE username = ?", (username,)).fetchall()
+existing_dates = [datetime.datetime.strptime(d[0], "%Y-%m-%d").date() for d in existing_selections]
+
+# Kalender-Events erstellen
 events = []
-for date in st.session_state[f'selected_{username}']:
+for date in existing_dates:
     events.append({
         "title": "Ausgewählt",
         "start": date.strftime("%Y-%m-%d"),
         "end": date.strftime("%Y-%m-%d"),
-        "color": "#FFA500",  # Orange für Auswahl
+        "color": "#FFA500",
         "allDay": True
     })
 
 # Kalender anzeigen
 calendar_options = get_calendar_view(start_date, weeks)
-calendar_events = calendar(
-    options=calendar_options,
-    events=events,  # Events übergeben für Anzeige
-    key=f"calendar_{username}"
-)
 
-# Auswahl verarbeiten
-if "selected" in calendar_events:
-    new_selected = [
-        datetime.datetime.strptime(e["start"], "%Y-%m-%d").date() 
-        for e in calendar_events["selected"]
-    ]
-    # Nur Arbeitstage berücksichtigen
-    new_selected = [d for d in new_selected if d in workdays]
-    st.session_state[f'selected_{username}'] = new_selected
-
-# Aktuelle Auswahl aus Session State laden
-selected = st.session_state[f'selected_{username}']
-
-# --- Benutzeroberfläche ---
 st.markdown(f"""
     <div style='background-color:#fffae6;padding:1rem;border-radius:0.5rem;border:1px solid #f0c36d;'>
         <h2 style='text-align:center;'>\u2728 Jetzt ist <span style='color:#d47b00;'>{username}</span> an der Reihe!</h2>
+        <p style='text-align:center;font-size:1.2rem;'>Du musst <strong>{n_days} Tage</strong> auswählen</p>
     </div>
 """, unsafe_allow_html=True)
 
+# Kalender rendern
+calendar_container = st.empty()
+with calendar_container.container():
+    cal = calendar(events=events, options=calendar_options, key=f"calendar_{username}")
+
+# Auswahl verarbeiten
+if cal.get("select"):
+    selected_date = datetime.datetime.strptime(cal["select"]["start"], "%Y-%m-%d").date()
+    
+    if selected_date in workdays:
+        if selected_date in st.session_state.selected_dates:
+            st.session_state.selected_dates.remove(selected_date)
+        else:
+            if len(st.session_state.selected_dates) < n_days:
+                st.session_state.selected_dates.append(selected_date)
+            else:
+                st.warning(f"Du kannst maximal {n_days} Tage auswählen")
+        
+        # Kurze Verzögerung um UI-Update zu ermöglichen
+        time.sleep(0.3)
+        st.experimental_rerun()
+
 # Auswahl-Status anzeigen
-if len(selected) > n_days:
-    st.error(f"❌ Du hast zu viele Tage ausgewählt! Max: {n_days}")
-elif len(selected) < n_days:
-    st.info(f"ℹ️ Du hast noch nicht alle Tage ausgewählt ({len(selected)}/{n_days})")
-else:
-    st.success(f"✅ Perfekt! Du hast genau {n_days} Tage ausgewählt.")
+col1, col2 = st.columns(2)
+with col1:
+    st.subheader("Deine Auswahl")
+    if st.session_state.selected_dates:
+        sorted_dates = sorted(st.session_state.selected_dates)
+        for d in sorted_dates:
+            st.markdown(f"- {d.strftime('%d.%m.%Y')} ({d.strftime('%A')})")
+    else:
+        st.info("Noch keine Tage ausgewählt")
+
+with col2:
+    st.subheader("Auswahl-Status")
+    if len(st.session_state.selected_dates) > n_days:
+        st.error(f"❌ Zu viele Tage ausgewählt! Max: {n_days}")
+    elif len(st.session_state.selected_dates) < n_days:
+        st.info(f"ℹ️ Noch nicht alle Tage ausgewählt ({len(st.session_state.selected_dates)}/{n_days})")
+    else:
+        st.success(f"✅ Perfekt! Du hast genau {n_days} Tage ausgewählt.")
 
 # Auswahl absenden
-if st.button("✅ Auswahl absenden und freigeben"):
-    if len(selected) != n_days:
+if st.button("✅ Auswahl absenden und freigeben", key="submit_btn"):
+    if len(st.session_state.selected_dates) != n_days:
         st.warning(f"Bitte genau {n_days} Tage auswählen.")
     else:
         c.execute("DELETE FROM selections WHERE username = ?", (username,))
-        for d in selected:
+        for d in st.session_state.selected_dates:
             c.execute("INSERT INTO selections (username, date) VALUES (?, ?)", (username, d.strftime("%Y-%m-%d")))
         c.execute("UPDATE users SET done = 1 WHERE username = ?", (username,))
         conn.commit()
         st.success("Gespeichert! Jetzt darf der nächste Elternteil sich einloggen.")
+        st.session_state.selected_dates = []
+        time.sleep(2)
         st.experimental_rerun()
 
 # Übersicht
