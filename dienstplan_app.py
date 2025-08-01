@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import datetime
-import random
 import sqlite3
 from streamlit_calendar import calendar
 
@@ -131,16 +130,16 @@ elif user_data[current_index][0] != username:
 def generate_workdays(start, weeks):
     days = pd.date_range(start=start, periods=weeks * 7)
     weekdays = days[days.weekday < 5]  # Nur Mo–Fr
-    return list(weekdays)
+    return [d.date() for d in list(weekdays)]
 
 def get_calendar_view(start_date, weeks):
     end_date = start_date + datetime.timedelta(weeks=weeks)
     month_diff = (end_date.year - start_date.year) * 12 + (end_date.month - start_date.month) + 1
     return {
         "initialView": "dayGridMonth",
-        "selectable": True,
+        "selectable": "multi",  # Korrektur: Mehrfachauswahl aktivieren
         "editable": True,
-        "select": True,
+        "selectMirror": True,   # Visuelles Feedback bei Auswahl
         "locale": "de",
         "height": 500 + month_diff * 100,
         "visibleRange": {
@@ -149,37 +148,67 @@ def get_calendar_view(start_date, weeks):
         }
     }
 
-# --- Anzeige Kalender ---
+# Session State für Auswahl initialisieren
+if f'selected_{username}' not in st.session_state:
+    # Bereits getätigte Auswahl laden
+    existing_selections = c.execute("SELECT date FROM selections WHERE username = ?", (username,)).fetchall()
+    st.session_state[f'selected_{username}'] = [datetime.datetime.strptime(d[0], "%Y-%m-%d").date() for d in existing_selections]
+
+# Arbeitstage generieren
 workdays = generate_workdays(start_date, weeks)
 total_days = len(workdays)
-if len(parents) == 0:
-    st.warning("⚠️ Keine Eltern gefunden.")
-    st.stop()
-
 days_per_parent = total_days // len(parents)
 rest_days = total_days % len(parents)
 n_days = days_per_parent + (1 if current_index < rest_days else 0)
 
-calendar_options = get_calendar_view(start_date, weeks)
+# Kalender-Events aus Session State erstellen
+events = []
+for date in st.session_state[f'selected_{username}']:
+    events.append({
+        "title": "Ausgewählt",
+        "start": date.strftime("%Y-%m-%d"),
+        "end": date.strftime("%Y-%m-%d"),
+        "color": "#FFA500",  # Orange für Auswahl
+        "allDay": True
+    })
 
+# Kalender anzeigen
+calendar_options = get_calendar_view(start_date, weeks)
+calendar_events = calendar(
+    options=calendar_options,
+    events=events,  # Events übergeben für Anzeige
+    key=f"calendar_{username}"
+)
+
+# Auswahl verarbeiten
+if "selected" in calendar_events:
+    new_selected = [
+        datetime.datetime.strptime(e["start"], "%Y-%m-%d").date() 
+        for e in calendar_events["selected"]
+    ]
+    # Nur Arbeitstage berücksichtigen
+    new_selected = [d for d in new_selected if d in workdays]
+    st.session_state[f'selected_{username}'] = new_selected
+
+# Aktuelle Auswahl aus Session State laden
+selected = st.session_state[f'selected_{username}']
+
+# --- Benutzeroberfläche ---
 st.markdown(f"""
     <div style='background-color:#fffae6;padding:1rem;border-radius:0.5rem;border:1px solid #f0c36d;'>
         <h2 style='text-align:center;'>\u2728 Jetzt ist <span style='color:#d47b00;'>{username}</span> an der Reihe!</h2>
     </div>
 """, unsafe_allow_html=True)
 
-calendar_events = calendar(
-    options=calendar_options,
-    key=f"calendar_{username}"
-)
-
-selected = [pd.to_datetime(e['start'][:10]) for e in calendar_events.get("selected", []) if pd.to_datetime(e['start'][:10]) in workdays]
-
+# Auswahl-Status anzeigen
 if len(selected) > n_days:
     st.error(f"❌ Du hast zu viele Tage ausgewählt! Max: {n_days}")
 elif len(selected) < n_days:
     st.info(f"ℹ️ Du hast noch nicht alle Tage ausgewählt ({len(selected)}/{n_days})")
+else:
+    st.success(f"✅ Perfekt! Du hast genau {n_days} Tage ausgewählt.")
 
+# Auswahl absenden
 if st.button("✅ Auswahl absenden und freigeben"):
     if len(selected) != n_days:
         st.warning(f"Bitte genau {n_days} Tage auswählen.")
@@ -190,7 +219,7 @@ if st.button("✅ Auswahl absenden und freigeben"):
         c.execute("UPDATE users SET done = 1 WHERE username = ?", (username,))
         conn.commit()
         st.success("Gespeichert! Jetzt darf der nächste Elternteil sich einloggen.")
-        st.stop()
+        st.experimental_rerun()
 
 # Übersicht
 st.subheader("\U0001F4CA Bisherige Auswahl")
