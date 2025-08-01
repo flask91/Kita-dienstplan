@@ -29,26 +29,34 @@ c.execute("""
 conn.commit()
 
 # --- Adminbereich ---
-with st.sidebar.expander("\U0001F6E0️ Adminbereich (optional)"):
-    admin_pw = st.text_input("Admin-Passwort", type="password")
+st.sidebar.subheader("🛠️ Adminzugang")
+if st.sidebar.checkbox("Admin-Modus anzeigen"):
+    admin_pw = st.sidebar.text_input("Admin-Passwort", type="password")
     if admin_pw == "admin":
-        st.success("Admin-Modus aktiv")
-        st.markdown("**Benutzerkonten verwalten**")
-        users = pd.read_sql_query("SELECT * FROM users ORDER BY ordering", conn)
-        st.dataframe(users)
-        reset_user = st.text_input("Benutzer zurücksetzen (Name eingeben)")
-        if st.button("Zurücksetzen") and reset_user:
-            c.execute("UPDATE users SET done = 0 WHERE username = ?", (reset_user,))
-            c.execute("DELETE FROM selections WHERE username = ?", (reset_user,))
+        st.sidebar.success("Admin eingeloggt")
+        if st.sidebar.button("📥 Demo-Eltern importieren"):
+            demo_parents = [f"eltern{i+1}" for i in range(7)]
+            for i, name in enumerate(demo_parents):
+                c.execute("INSERT OR IGNORE INTO users (username, password, ordering) VALUES (?, ?, ?)", (name, name, i))
             conn.commit()
-            st.success(f"Benutzer {reset_user} wurde zurückgesetzt.")
-        if st.button("ALLE zurücksetzen"):
+            st.success("Demo-Eltern erfolgreich eingefügt!")
+
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("### Benutzer verwalten")
+        user_admin_data = pd.read_sql_query("SELECT * FROM users ORDER BY ordering", conn)
+        for i, row in user_admin_data.iterrows():
+            with st.sidebar.expander(f"👤 {row['username']}"):
+                new_pw = st.text_input(f"Neues Passwort für {row['username']}", key=f"pw_{row['username']}")
+                if st.button(f"Speichern für {row['username']}", key=f"btn_{row['username']}"):
+                    c.execute("UPDATE users SET password = ? WHERE username = ?", (new_pw, row['username']))
+                    conn.commit()
+                    st.success(f"Passwort für {row['username']} geändert")
+
+        if st.sidebar.button("🔄 Alle Eltern zurücksetzen"):
             c.execute("UPDATE users SET done = 0")
             c.execute("DELETE FROM selections")
             conn.commit()
-            st.success("Alle Benutzer zurückgesetzt.")
-    elif admin_pw:
-        st.error("Falsches Admin-Passwort")
+            st.success("Alle Eltern zurückgesetzt")
 
 # --- Benutzerlogin ---
 st.sidebar.subheader("\U0001F511 Login")
@@ -130,7 +138,7 @@ if parents_input:
 
         st.markdown(f"""
             <div style='background-color:#fffae6;padding:1rem;border-radius:0.5rem;border:1px solid #f0c36d;'>
-                <h2 style='text-align:center;'>✨ Jetzt ist <span style='color:#d47b00;'>{username}</span> an der Reihe!</h2>
+                <h2 style='text-align:center;'>\u2728 Jetzt ist <span style='color:#d47b00;'>{username}</span> an der Reihe!</h2>
             </div>
         """, unsafe_allow_html=True)
 
