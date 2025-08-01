@@ -27,7 +27,7 @@ c.execute("""
     )
 """)
 c.execute("""
-    CREATE TABLE IF NOT EXISTS config (
+    CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
         value TEXT
     )
@@ -36,12 +36,24 @@ conn.commit()
 
 # --- Adminbereich ---
 st.sidebar.subheader("🛠️ Adminzugang")
-admin_mode = False
+is_admin = False
 if st.sidebar.checkbox("Admin-Modus anzeigen"):
     admin_pw = st.sidebar.text_input("Admin-Passwort", type="password")
     if admin_pw == "admin":
-        admin_mode = True
+        is_admin = True
         st.sidebar.success("Admin eingeloggt")
+
+        # Einstellungen nur für Admin sichtbar
+        start_date = st.sidebar.date_input("Startdatum", datetime.date.today())
+        weeks = st.sidebar.number_input("Zeitraum in Wochen", min_value=1, max_value=52, value=7)
+        parents_input = st.sidebar.text_area("Elternliste (ein Name pro Zeile)")
+
+        if st.sidebar.button("💾 Einstellungen speichern"):
+            c.execute("REPLACE INTO settings (key, value) VALUES (?, ?)", ("start_date", str(start_date)))
+            c.execute("REPLACE INTO settings (key, value) VALUES (?, ?)", ("weeks", str(weeks)))
+            c.execute("REPLACE INTO settings (key, value) VALUES (?, ?)", ("parents", parents_input))
+            conn.commit()
+            st.success("Einstellungen gespeichert")
 
         if st.sidebar.button("📥 Demo-Eltern importieren"):
             demo_parents = [f"eltern{i+1}" for i in range(7)]
@@ -67,19 +79,6 @@ if st.sidebar.checkbox("Admin-Modus anzeigen"):
             conn.commit()
             st.success("Alle Eltern zurückgesetzt")
 
-        st.sidebar.header("🔧 Einstellungen")
-        start_date = st.sidebar.date_input("Startdatum", datetime.date.today())
-        weeks = st.sidebar.number_input("Zeitraum in Wochen", min_value=1, max_value=52, value=7)
-        parents_input = st.sidebar.text_area("Elternliste (ein Name pro Zeile)")
-        mode = st.sidebar.radio("Kalenderauswahlmodus", ["Ein Kalender für alle", "Ein Kalender pro Person"])
-
-        # Einstellungen speichern
-        c.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", ("start_date", start_date.isoformat()))
-        c.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", ("weeks", str(weeks)))
-        c.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", ("parents_input", parents_input))
-        c.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", ("mode", mode))
-        conn.commit()
-
 # --- Benutzerlogin ---
 st.sidebar.subheader("\U0001F511 Login")
 username = st.sidebar.text_input("Benutzername")
@@ -93,28 +92,36 @@ if username and password:
     else:
         st.sidebar.error("❌ Benutzername oder Passwort falsch")
 
-if not user_authenticated:
+if user_authenticated:
+    st.sidebar.success(f"✅ Eingeloggt als {username}")
+else:
     st.stop()
 
 # --- Einstellungen laden ---
-def load_config():
-    config = dict(c.execute("SELECT key, value FROM config").fetchall())
-    start = pd.to_datetime(config.get("start_date", datetime.date.today()))
-    weeks = int(config.get("weeks", 7))
-    parents_raw = config.get("parents_input", "")
-    mode = config.get("mode", "Ein Kalender für alle")
-    parents = [p.strip() for p in parents_raw.strip().split("\n") if p.strip()]
-    return start, weeks, parents, mode
+def get_setting(key, default=None):
+    row = c.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    return row[0] if row else default
 
-start_date, weeks, parents, mode = load_config()
+start_date_str = get_setting("start_date")
+weeks_str = get_setting("weeks")
+parents_raw = get_setting("parents")
 
-# Eltern speichern, falls noch nicht in DB
-def sync_parents(parents):
-    for i, name in enumerate(parents):
-        c.execute("INSERT OR IGNORE INTO users (username, password, ordering) VALUES (?, ?, ?)", (name, name, i))
-    conn.commit()
+if not start_date_str or not weeks_str or not parents_raw:
+    st.error("⚠️ Einstellungen unvollständig. Bitte Admin kontaktieren.")
+    st.stop()
 
-sync_parents(parents)
+start_date = datetime.datetime.strptime(start_date_str, "%Y-%m-%d").date()
+weeks = int(weeks_str)
+parents = [p.strip() for p in parents_raw.strip().split("\n") if p.strip()]
+
+if len(parents) == 0:
+    st.error("⚠️ Keine Eltern in der Liste gefunden.")
+    st.stop()
+
+# Eltern in DB sichern (zur Sicherheit)
+for i, name in enumerate(parents):
+    c.execute("INSERT OR IGNORE INTO users (username, password, ordering) VALUES (?, ?, ?)", (name, name, i))
+conn.commit()
 
 # --- Kalenderhilfe ---
 def generate_workdays(start, weeks):
@@ -129,7 +136,7 @@ def get_calendar_view(start_date, weeks):
         "initialView": "dayGridMonth",
         "selectable": True,
         "editable": True,
-        "select": {"enabled": True},
+        "select": True,
         "locale": "de",
         "height": 500 + month_diff * 100,
         "visibleRange": {
@@ -138,27 +145,33 @@ def get_calendar_view(start_date, weeks):
         }
     }
 
-# --- Ablauf für eingeloggten Elternteil ---
+# --- Ablaufsteuerung ---
 user_data = c.execute("SELECT username, ordering, done FROM users ORDER BY ordering ASC").fetchall()
 current_index = next((i for i, u in enumerate(user_data) if u[2] == 0), None)
 
 if current_index is None:
     st.success("✅ Alle Eltern haben ihre Auswahl abgeschlossen!")
-elif user_data[current_index][0] != username:
+    st.stop()
+
+if user_data[current_index][0] != username:
     st.warning(f"⏳ Bitte warte, bis du an der Reihe bist. Aktuell ist **{user_data[current_index][0]}** dran.")
     st.stop()
 
+# Aktiver Elternteil darf auswählen
 workdays = generate_workdays(start_date, weeks)
 total_days = len(workdays)
+if len(parents) == 0:
+    st.error("Keine Eltern definiert.")
+    st.stop()
+
 days_per_parent = total_days // len(parents)
 rest_days = total_days % len(parents)
+n_days = days_per_parent + (1 if current_index < rest_days else 0)
 
 st.markdown(f"**Verfügbare Werktage:** {total_days} ({start_date} bis {start_date + datetime.timedelta(weeks=weeks)})")
-st.markdown(f"**Tage pro Elternteil:** {days_per_parent} (+1 für {rest_days} Personen)")
+st.markdown(f"**Tage pro Elternteil:** {n_days}")
 
-n_days = days_per_parent + (1 if current_index < rest_days else 0)
 calendar_options = get_calendar_view(start_date, weeks)
-
 st.markdown(f"""
     <div style='background-color:#fffae6;padding:1rem;border-radius:0.5rem;border:1px solid #f0c36d;'>
         <h2 style='text-align:center;'>✨ Jetzt ist <span style='color:#d47b00;'>{username}</span> an der Reihe!</h2>
@@ -169,7 +182,6 @@ events = calendar(
     options=calendar_options,
     key=f"calendar_{username}"
 )
-
 selected = [pd.to_datetime(e['start'][:10]) for e in events.get("selected", []) if pd.to_datetime(e['start'][:10]) in workdays]
 
 if len(selected) > n_days:
@@ -177,14 +189,16 @@ if len(selected) > n_days:
 elif len(selected) < n_days:
     st.info(f"ℹ️ Du hast noch nicht alle Tage ausgewählt ({len(selected)}/{n_days})")
 
-if len(selected) == n_days:
-    if st.button("✅ Auswahl speichern & weiter"):
+if st.button("✅ Auswahl absenden und freigeben"):
+    if len(selected) != n_days:
+        st.error("Bitte genau die erforderliche Anzahl an Tagen auswählen, bevor du absendest.")
+    else:
         c.execute("DELETE FROM selections WHERE username = ?", (username,))
         for d in selected:
-            c.execute("INSERT INTO selections (username, date) VALUES (?, ?)", (username, d.strftime("%Y-%m-%d")))
+            c.execute("INSERT INTO selections (username, date) VALUES (?, ?) ", (username, d.strftime("%Y-%m-%d")))
         c.execute("UPDATE users SET done = 1 WHERE username = ?", (username,))
         conn.commit()
-        st.success("Gespeichert! Bitte nächste Person einloggen.")
+        st.success("Auswahl gespeichert! Der nächste Elternteil kann sich jetzt einloggen.")
         st.stop()
 
 # Übersicht
