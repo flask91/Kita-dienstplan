@@ -90,8 +90,14 @@ if parents_input:
         else:
             if st.session_state.step < len(parents):
                 parent = parents[st.session_state.step]
-                st.markdown(f"### 🧑‍🍼 {parent}")
-                st.info(f"➡️ Jetzt ist **{parent}** an der Reihe auszuwählen.")
+
+                # GUT SICHTBAR OBEN ANZEIGEN
+                st.markdown("""
+                    <div style='background-color:#fffae6;padding:1rem;border-radius:0.5rem;border:1px solid #f0c36d;'>
+                        <h2 style='text-align:center;'>🎯 Jetzt ist <span style='color:#d47b00;'>""" + parent + """</span> an der Reihe!</h2>
+                    </div>
+                """, unsafe_allow_html=True)
+
                 n_days = days_per_parent + (1 if st.session_state.step < rest_days else 0)
 
                 events = calendar(
