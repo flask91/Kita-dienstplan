@@ -37,6 +37,10 @@ def get_calendar_view(start_date, weeks):
         }
     }
 
+if "step" not in st.session_state:
+    st.session_state.step = 0
+if "individual_selections" not in st.session_state:
+    st.session_state.individual_selections = {}
 
 if parents_input:
     parents = [p.strip() for p in parents_input.strip().split("\n") if p.strip()]
@@ -84,9 +88,12 @@ if parents_input:
                 remaining_days.discard(date)
 
         else:
-            for idx, parent in enumerate(parents):
+            if st.session_state.step < len(parents):
+                parent = parents[st.session_state.step]
                 st.markdown(f"### 🧑‍🍼 {parent}")
-                n_days = days_per_parent + (1 if idx < rest_days else 0)
+                st.info(f"➡️ Jetzt ist **{parent}** an der Reihe auszuwählen.")
+                n_days = days_per_parent + (1 if st.session_state.step < rest_days else 0)
+
                 events = calendar(
                     options=calendar_options,
                     key=f"calendar_{parent}"
@@ -97,8 +104,14 @@ if parents_input:
                 if len(selected) > n_days:
                     st.error(f"❌ Du hast zu viele Tage ausgewählt! Max: {n_days}")
                 else:
-                    selections[parent] = selected
-                    remaining_days -= set(selected)
+                    st.session_state.individual_selections[parent] = selected
+                    if st.button("✅ Auswahl speichern & weiter"):
+                        st.session_state.step += 1
+                        st.experimental_rerun()
+
+            selections = st.session_state.individual_selections
+            for selected in selections.values():
+                remaining_days -= set(selected)
 
         st.subheader("📊 Übersicht")
         table = []
