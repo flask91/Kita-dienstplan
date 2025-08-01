@@ -3,6 +3,8 @@ import pandas as pd
 import datetime
 import random
 
+from streamlit_calendar import calendar
+
 st.set_page_config(page_title="KITA Dienstplan Tool")
 st.title("📅 KITA Dienstplan Generator")
 
@@ -11,6 +13,7 @@ st.sidebar.header("🔧 Einstellungen")
 start_date = st.sidebar.date_input("Startdatum", datetime.date.today())
 weeks = st.sidebar.number_input("Zeitraum in Wochen", min_value=1, max_value=52, value=7)
 parents_input = st.sidebar.text_area("Elternliste (ein Name pro Zeile)")
+mode = st.sidebar.radio("Kalenderauswahlmodus", ["Ein Kalender für alle", "Ein Kalender pro Person"])
 
 def generate_workdays(start, weeks):
     days = pd.date_range(start=start, periods=weeks * 7)
@@ -46,23 +49,47 @@ if parents_input:
         selections = {}
         remaining_days = set(workdays)
 
-        for idx, parent in enumerate(parents):
-            st.markdown(f"### 🧑‍🍼 {parent}")
-            n_days = days_per_parent + (1 if idx < rest_days else 0)
-            preselected = selections.get(parent, [])
-            calendar_df = pd.DataFrame({"Datum": workdays})
-            calendar_df["Wochentag"] = calendar_df["Datum"].dt.strftime("%A")
-            calendar_df["Auswählen"] = calendar_df["Datum"].isin(preselected)
+        if mode == "Ein Kalender für alle":
+            st.markdown("### 🗓️ Gemeinsamer Kalender")
+            all_events = calendar(
+                options={
+                    "initialView": "dayGridMonth",
+                    "selectable": True,
+                    "locale": "de",
+                    "editable": False
+                },
+                key="shared_calendar"
+            )
 
-            edited = st.data_editor(calendar_df, key=f"calendar_{parent}", use_container_width=True, disabled=["Datum", "Wochentag"])
+            selected_dates = [pd.to_datetime(e['start'][:10]) for e in all_events.get("selected", []) if pd.to_datetime(e['start'][:10]) in workdays]
 
-            selected_dates = edited[edited["Auswählen"] == True]["Datum"].tolist()
+            per_parent_count = {p: 0 for p in parents}
+            for i, date in enumerate(selected_dates):
+                p = parents[i % len(parents)]
+                selections.setdefault(p, []).append(date)
+                remaining_days.discard(date)
 
-            if len(selected_dates) > n_days:
-                st.error(f"❌ Du hast zu viele Tage ausgewählt! Max: {n_days}")
-            else:
-                selections[parent] = selected_dates
-                remaining_days -= set(selected_dates)
+        else:
+            for idx, parent in enumerate(parents):
+                st.markdown(f"### 🧑‍🍼 {parent}")
+                n_days = days_per_parent + (1 if idx < rest_days else 0)
+                events = calendar(
+                    options={
+                        "initialView": "dayGridMonth",
+                        "selectable": True,
+                        "locale": "de",
+                        "editable": False
+                    },
+                    key=f"calendar_{parent}"
+                )
+
+                selected = [pd.to_datetime(e['start'][:10]) for e in events.get("selected", []) if pd.to_datetime(e['start'][:10]) in workdays]
+
+                if len(selected) > n_days:
+                    st.error(f"❌ Du hast zu viele Tage ausgewählt! Max: {n_days}")
+                else:
+                    selections[parent] = selected
+                    remaining_days -= set(selected)
 
         st.subheader("📊 Übersicht")
         table = []
