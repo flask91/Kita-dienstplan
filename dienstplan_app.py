@@ -15,10 +15,28 @@ weeks = st.sidebar.number_input("Zeitraum in Wochen", min_value=1, max_value=52,
 parents_input = st.sidebar.text_area("Elternliste (ein Name pro Zeile)")
 mode = st.sidebar.radio("Kalenderauswahlmodus", ["Ein Kalender für alle", "Ein Kalender pro Person"])
 
+
 def generate_workdays(start, weeks):
     days = pd.date_range(start=start, periods=weeks * 7)
     weekdays = days[days.weekday < 5]  # Nur Mo–Fr
     return list(weekdays)
+
+
+def get_calendar_view(start_date, weeks):
+    end_date = start_date + datetime.timedelta(weeks=weeks)
+    month_diff = (end_date.year - start_date.year) * 12 + (end_date.month - start_date.month) + 1
+    return {
+        "initialView": "dayGridMonth",
+        "selectable": True,
+        "locale": "de",
+        "editable": False,
+        "height": 500 + month_diff * 100,
+        "visibleRange": {
+            "start": start_date.strftime("%Y-%m-%d"),
+            "end": end_date.strftime("%Y-%m-%d")
+        }
+    }
+
 
 if parents_input:
     parents = [p.strip() for p in parents_input.strip().split("\n") if p.strip()]
@@ -48,16 +66,12 @@ if parents_input:
 
         selections = {}
         remaining_days = set(workdays)
+        calendar_options = get_calendar_view(start_date, weeks)
 
         if mode == "Ein Kalender für alle":
             st.markdown("### 🗓️ Gemeinsamer Kalender")
             all_events = calendar(
-                options={
-                    "initialView": "dayGridMonth",
-                    "selectable": True,
-                    "locale": "de",
-                    "editable": False
-                },
+                options=calendar_options,
                 key="shared_calendar"
             )
 
@@ -74,12 +88,7 @@ if parents_input:
                 st.markdown(f"### 🧑‍🍼 {parent}")
                 n_days = days_per_parent + (1 if idx < rest_days else 0)
                 events = calendar(
-                    options={
-                        "initialView": "dayGridMonth",
-                        "selectable": True,
-                        "locale": "de",
-                        "editable": False
-                    },
+                    options=calendar_options,
                     key=f"calendar_{parent}"
                 )
 
@@ -97,7 +106,10 @@ if parents_input:
             for d in selections.get(p, []):
                 table.append({"Eltern": p, "Datum": d.strftime('%Y-%m-%d'), "Wochentag": d.strftime('%A')})
 
-        df_plan = pd.DataFrame(table).sort_values("Datum")
+        df_plan = pd.DataFrame(table)
+        if not df_plan.empty and "Datum" in df_plan.columns:
+            df_plan = df_plan.sort_values("Datum")
+
         st.dataframe(df_plan)
 
         if remaining_days:
@@ -105,7 +117,8 @@ if parents_input:
         else:
             st.success("✅ Alle Tage wurden verteilt!")
 
-        csv = df_plan.to_csv(index=False).encode('utf-8')
-        st.download_button("📥 Plan als CSV herunterladen", csv, "dienstplan.csv", "text/csv")
+        if not df_plan.empty:
+            csv = df_plan.to_csv(index=False).encode('utf-8')
+            st.download_button("📥 Plan als CSV herunterladen", csv, "dienstplan.csv", "text/csv")
 else:
     st.info("Bitte gib die Elternliste ein, um zu starten.")
