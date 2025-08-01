@@ -2,25 +2,68 @@ import streamlit as st
 import pandas as pd
 import datetime
 import random
-
+import sqlite3
 from streamlit_calendar import calendar
 
 st.set_page_config(page_title="KITA Dienstplan Tool")
-st.title("📅 KITA Dienstplan Generator")
+st.title("\U0001F4C5 KITA Dienstplan Generator")
 
-# Eingaben
-st.sidebar.header("🔧 Einstellungen")
+# --- Datenbank Setup ---
+conn = sqlite3.connect("kita_dienstplan.db")
+c = conn.cursor()
+c.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        username TEXT PRIMARY KEY,
+        password TEXT,
+        ordering INTEGER,
+        done INTEGER DEFAULT 0
+    )
+""")
+c.execute("""
+    CREATE TABLE IF NOT EXISTS selections (
+        username TEXT,
+        date TEXT,
+        PRIMARY KEY(username, date)
+    )
+""")
+conn.commit()
+
+# --- Benutzerlogin ---
+st.sidebar.subheader("\U0001F511 Login")
+username = st.sidebar.text_input("Benutzername")
+password = st.sidebar.text_input("Passwort", type="password")
+
+user_authenticated = False
+if username and password:
+    user = c.execute("SELECT * FROM users WHERE username=? AND password=?", (username, password)).fetchone()
+    if user:
+        user_authenticated = True
+    else:
+        st.sidebar.error("❌ Benutzername oder Passwort falsch")
+
+if user_authenticated:
+    st.sidebar.success(f"✅ Eingeloggt als {username}")
+else:
+    st.stop()
+
+# Einstellungen
+st.sidebar.header("\U0001F527 Einstellungen")
 start_date = st.sidebar.date_input("Startdatum", datetime.date.today())
 weeks = st.sidebar.number_input("Zeitraum in Wochen", min_value=1, max_value=52, value=7)
 parents_input = st.sidebar.text_area("Elternliste (ein Name pro Zeile)")
 mode = st.sidebar.radio("Kalenderauswahlmodus", ["Ein Kalender für alle", "Ein Kalender pro Person"])
 
+# Eltern speichern, falls noch nicht in DB
+def sync_parents(parents):
+    for i, name in enumerate(parents):
+        c.execute("INSERT OR IGNORE INTO users (username, password, ordering) VALUES (?, ?, ?)", (name, name, i))
+    conn.commit()
 
+# --- Kalenderhilfe ---
 def generate_workdays(start, weeks):
     days = pd.date_range(start=start, periods=weeks * 7)
     weekdays = days[days.weekday < 5]  # Nur Mo–Fr
     return list(weekdays)
-
 
 def get_calendar_view(start_date, weeks):
     end_date = start_date + datetime.timedelta(weeks=weeks)
@@ -37,28 +80,20 @@ def get_calendar_view(start_date, weeks):
         }
     }
 
-if "step" not in st.session_state:
-    st.session_state.step = 0
-if "individual_selections" not in st.session_state:
-    st.session_state.individual_selections = {}
-
 if parents_input:
     parents = [p.strip() for p in parents_input.strip().split("\n") if p.strip()]
     if len(parents) == 0:
         st.warning("Bitte mindestens eine Person angeben.")
     else:
-        if st.sidebar.button("Zufällige Reihenfolge erstellen"):
-            random.shuffle(parents)
+        sync_parents(parents)
+        user_data = c.execute("SELECT username, ordering, done FROM users ORDER BY ordering ASC").fetchall()
+        current_index = next((i for i, u in enumerate(user_data) if u[2] == 0), None)
 
-        st.subheader("👪 Eltern in Reihenfolge")
-        st.write("Falls nötig, kannst du die Reihenfolge der Eltern hier manuell anpassen:")
-        new_order_input = st.text_area("Reihenfolge manuell ändern (ein Name pro Zeile):", "\n".join(parents))
-
-        new_order = [name.strip() for name in new_order_input.strip().split("\n") if name.strip()]
-        if set(new_order) == set(parents) and len(new_order) == len(parents):
-            parents = new_order
-        else:
-            st.warning("Die manuelle Reihenfolge ist ungültig oder unvollständig. Ursprüngliche Reihenfolge wird beibehalten.")
+        if current_index is None:
+            st.success("✅ Alle Eltern haben ihre Auswahl abgeschlossen!")
+        elif user_data[current_index][0] != username:
+            st.warning(f"⏳ Bitte warte, bis du an der Reihe bist. Aktuell ist **{user_data[current_index][0]}** dran.")
+            st.stop()
 
         workdays = generate_workdays(start_date, weeks)
         total_days = len(workdays)
@@ -68,76 +103,49 @@ if parents_input:
         st.markdown(f"**Verfügbare Werktage:** {total_days} ({start_date} bis {start_date + datetime.timedelta(weeks=weeks)})")
         st.markdown(f"**Tage pro Elternteil:** {days_per_parent} (+1 für {rest_days} Personen)")
 
-        selections = {}
-        remaining_days = set(workdays)
+        n_days = days_per_parent + (1 if current_index < rest_days else 0)
         calendar_options = get_calendar_view(start_date, weeks)
 
-        if mode == "Ein Kalender für alle":
-            st.markdown("### 🗓️ Gemeinsamer Kalender")
-            all_events = calendar(
-                options=calendar_options,
-                key="shared_calendar"
-            )
+        st.markdown(f"""
+            <div style='background-color:#fffae6;padding:1rem;border-radius:0.5rem;border:1px solid #f0c36d;'>
+                <h2 style='text-align:center;'>\u2728 Jetzt ist <span style='color:#d47b00;'>{username}</span> an der Reihe!</h2>
+            </div>
+        """, unsafe_allow_html=True)
 
-            selected_dates = [pd.to_datetime(e['start'][:10]) for e in all_events.get("selected", []) if pd.to_datetime(e['start'][:10]) in workdays]
+        events = calendar(
+            options=calendar_options,
+            key=f"calendar_{username}"
+        )
 
-            per_parent_count = {p: 0 for p in parents}
-            for i, date in enumerate(selected_dates):
-                p = parents[i % len(parents)]
-                selections.setdefault(p, []).append(date)
-                remaining_days.discard(date)
+        selected = [pd.to_datetime(e['start'][:10]) for e in events.get("selected", []) if pd.to_datetime(e['start'][:10]) in workdays]
 
-        else:
-            if st.session_state.step < len(parents):
-                parent = parents[st.session_state.step]
+        if len(selected) > n_days:
+            st.error(f"❌ Du hast zu viele Tage ausgewählt! Max: {n_days}")
+        elif len(selected) < n_days:
+            st.info(f"ℹ️ Du hast noch nicht alle Tage ausgewählt ({len(selected)}/{n_days})")
 
-                # GUT SICHTBAR OBEN ANZEIGEN
-                st.markdown("""
-                    <div style='background-color:#fffae6;padding:1rem;border-radius:0.5rem;border:1px solid #f0c36d;'>
-                        <h2 style='text-align:center;'>🎯 Jetzt ist <span style='color:#d47b00;'>""" + parent + """</span> an der Reihe!</h2>
-                    </div>
-                """, unsafe_allow_html=True)
+        if len(selected) == n_days:
+            if st.button("✅ Auswahl speichern & weiter"):
+                # Auswahl speichern
+                c.execute("DELETE FROM selections WHERE username = ?", (username,))
+                for d in selected:
+                    c.execute("INSERT INTO selections (username, date) VALUES (?, ?)", (username, d.strftime("%Y-%m-%d")))
+                c.execute("UPDATE users SET done = 1 WHERE username = ?", (username,))
+                conn.commit()
+                st.success("Gespeichert! Bitte nächste Person einloggen.")
+                st.stop()
 
-                n_days = days_per_parent + (1 if st.session_state.step < rest_days else 0)
-
-                events = calendar(
-                    options=calendar_options,
-                    key=f"calendar_{parent}"
-                )
-
-                selected = [pd.to_datetime(e['start'][:10]) for e in events.get("selected", []) if pd.to_datetime(e['start'][:10]) in workdays]
-
-                if len(selected) > n_days:
-                    st.error(f"❌ Du hast zu viele Tage ausgewählt! Max: {n_days}")
-                else:
-                    st.session_state.individual_selections[parent] = selected
-                    if st.button("✅ Auswahl speichern & weiter"):
-                        st.session_state.step += 1
-                        st.experimental_rerun()
-
-            selections = st.session_state.individual_selections
-            for selected in selections.values():
-                remaining_days -= set(selected)
-
-        st.subheader("📊 Übersicht")
-        table = []
-        for p in parents:
-            for d in selections.get(p, []):
-                table.append({"Eltern": p, "Datum": d.strftime('%Y-%m-%d'), "Wochentag": d.strftime('%A')})
-
-        df_plan = pd.DataFrame(table)
-        if not df_plan.empty and "Datum" in df_plan.columns:
-            df_plan = df_plan.sort_values("Datum")
-
-        st.dataframe(df_plan)
-
-        if remaining_days:
-            st.warning(f"⚠️ Noch nicht verteilte Tage: {len(remaining_days)}")
-        else:
-            st.success("✅ Alle Tage wurden verteilt!")
-
-        if not df_plan.empty:
-            csv = df_plan.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Plan als CSV herunterladen", csv, "dienstplan.csv", "text/csv")
+        # Übersicht
+        st.subheader("\U0001F4CA Übersicht")
+        df = pd.read_sql_query("SELECT * FROM selections", conn)
+        if not df.empty:
+            df['Datum'] = pd.to_datetime(df['date'])
+            df['Wochentag'] = df['Datum'].dt.strftime('%A')
+            df = df.drop(columns=['date'])
+            df = df.rename(columns={'username': 'Eltern'})
+            df = df.sort_values("Datum")
+            st.dataframe(df)
+            csv = df.to_csv(index=False).encode('utf-8')
+            st.download_button("\U0001F4E5 Plan als CSV herunterladen", csv, "dienstplan.csv", "text/csv")
 else:
     st.info("Bitte gib die Elternliste ein, um zu starten.")
