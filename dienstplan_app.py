@@ -28,6 +28,28 @@ c.execute("""
 """)
 conn.commit()
 
+# --- Adminbereich ---
+with st.sidebar.expander("\U0001F6E0️ Adminbereich (optional)"):
+    admin_pw = st.text_input("Admin-Passwort", type="password")
+    if admin_pw == "admin":
+        st.success("Admin-Modus aktiv")
+        st.markdown("**Benutzerkonten verwalten**")
+        users = pd.read_sql_query("SELECT * FROM users ORDER BY ordering", conn)
+        st.dataframe(users)
+        reset_user = st.text_input("Benutzer zurücksetzen (Name eingeben)")
+        if st.button("Zurücksetzen") and reset_user:
+            c.execute("UPDATE users SET done = 0 WHERE username = ?", (reset_user,))
+            c.execute("DELETE FROM selections WHERE username = ?", (reset_user,))
+            conn.commit()
+            st.success(f"Benutzer {reset_user} wurde zurückgesetzt.")
+        if st.button("ALLE zurücksetzen"):
+            c.execute("UPDATE users SET done = 0")
+            c.execute("DELETE FROM selections")
+            conn.commit()
+            st.success("Alle Benutzer zurückgesetzt.")
+    elif admin_pw:
+        st.error("Falsches Admin-Passwort")
+
 # --- Benutzerlogin ---
 st.sidebar.subheader("\U0001F511 Login")
 username = st.sidebar.text_input("Benutzername")
@@ -108,7 +130,7 @@ if parents_input:
 
         st.markdown(f"""
             <div style='background-color:#fffae6;padding:1rem;border-radius:0.5rem;border:1px solid #f0c36d;'>
-                <h2 style='text-align:center;'>\u2728 Jetzt ist <span style='color:#d47b00;'>{username}</span> an der Reihe!</h2>
+                <h2 style='text-align:center;'>✨ Jetzt ist <span style='color:#d47b00;'>{username}</span> an der Reihe!</h2>
             </div>
         """, unsafe_allow_html=True)
 
